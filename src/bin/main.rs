@@ -28,7 +28,7 @@ pub struct RGB8 {
 }
 
 impl RGB8 {
-    #[must_use] 
+    #[must_use]
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
@@ -53,12 +53,14 @@ const FILTER_ALPHA: f32 = 0.2;
 
 fn led_pulses_for_clock(src_clock_mhz: u32) -> (PulseCode, PulseCode) {
     (
+        #[allow(clippy::cast_possible_truncation)]
         PulseCode::new(
             Level::High,
             ((T0H_NS * src_clock_mhz) / 1000) as u16,
             Level::Low,
             ((T0L_NS * src_clock_mhz) / 1000) as u16,
         ),
+        #[allow(clippy::cast_possible_truncation)]
         PulseCode::new(
             Level::High,
             ((T1H_NS * src_clock_mhz) / 1000) as u16,
@@ -96,13 +98,18 @@ fn calculate_throttle(voltage_mv: f32) -> u8 {
     // 3. Clamp result to 0.0 - 1.0 (float precision safety)
     let t_safe = t.clamp(0.0, 1.0);
 
-    (t_safe * 100.0) as u8
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let result = (t_safe * 100.0) as u8;
+
+    result
 }
 
 fn throttle_to_color(throttle: u8) -> RGB8 {
     let t = f32::from(throttle) / 100.0;
     // Blue for 0% (Idle), Red for 100% (Full)
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let r = (255.0 * t) as u8;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let b = (255.0 * (1.0 - t)) as u8;
     RGB8::new(r, 0, b)
 }
