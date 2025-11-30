@@ -1,6 +1,11 @@
 #![no_std]
 #![no_main]
 #![deny(clippy::mem_forget)]
+#![allow(
+    clippy::missing_safety_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 
 use defmt::{Format, info, warn};
 use driving_wheel::esp32s3_touch_ll::TouchSensorLL;
@@ -57,9 +62,9 @@ const BUFFER_SIZE: usize = 25;
 
 const V_MIN: f32 = 652.9;
 const V_MAX: f32 = 1068.7;
-const POLY_A: f32 = -3.71488240e-06;
-const POLY_B: f32 = 8.80067475e-03;
-const POLY_C: f32 = -4.16248326e+00;
+const POLY_A: f32 = -3.714_882_5e-6;
+const POLY_B: f32 = 8.800_675e-3;
+const POLY_C: f32 = -4.162_483;
 const FILTER_ALPHA: f32 = 0.2;
 const TOUCH_THRESHOLD: u32 = 40_000;
 
@@ -108,6 +113,22 @@ fn throttle_to_color(throttle: u8) -> RGB8 {
     let r = (255.0 * t) as u8;
     let b = (255.0 * (1.0 - t)) as u8;
     RGB8::new(r, 0, b)
+}
+
+async fn wait_for_release_and_rearm(
+    touch: &mut TouchSensor<driving_wheel::touch::sensor_state::Running>,
+) {
+    loop {
+        if !touch.is_channel_active(TouchChannel::Num14) {
+            break;
+        }
+        Timer::after(Duration::from_millis(50)).await;
+    }
+
+    unsafe {
+        TouchSensorLL::interrupt_clear(TOUCH_LL_INTR_MASK_ACTIVE);
+        TouchSensorLL::interrupt_enable(TOUCH_LL_INTR_MASK_ACTIVE);
+    }
 }
 
 #[esp_rtos::main]
@@ -166,22 +187,6 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Starting Main Loop...");
 
-    async fn wait_for_release_and_rearm(
-        touch: &mut TouchSensor<driving_wheel::touch::sensor_state::Running>,
-    ) {
-        loop {
-            if !touch.is_channel_active(TouchChannel::Num14) {
-                break;
-            }
-            Timer::after(Duration::from_millis(50)).await;
-        }
-
-        unsafe {
-            TouchSensorLL::interrupt_clear(TOUCH_LL_INTR_MASK_ACTIVE);
-            TouchSensorLL::interrupt_enable(TOUCH_LL_INTR_MASK_ACTIVE);
-        }
-    }
-
     loop {
         if is_paused {
             info!("System Paused. Waiting for touch to resume...");
@@ -194,8 +199,8 @@ async fn main(spawner: Spawner) -> ! {
             let touch_future = TOUCH_SIGNAL.wait();
 
             match select(update_future, touch_future).await {
-                Either::First(_) => match nb::block!(adc.read_oneshot(&mut adc_pin)) {
-                    Ok(raw) => {
+                Either::First(()) => {
+                    if let Ok(raw) = nb::block!(adc.read_oneshot(&mut adc_pin)) {
                         let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
                         filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
 
@@ -204,15 +209,14 @@ async fn main(spawner: Spawner) -> ! {
                         ws2812_encode(color, pulses, &mut rmt_buffer);
 
                         match channel.transmit(&rmt_buffer).await {
-                            Ok(_) => {}
+                            Ok(()) => {}
                             Err(e) => {
                                 warn!("RMT Transmit Error: {:?}", e);
                             }
                         }
                     }
-                    Err(_) => {}
-                },
-                Either::Second(_) => {
+                }
+                Either::Second(()) => {
                     info!("Touch detected: Pausing system.");
                     is_paused = true;
                     wait_for_release_and_rearm(&mut touch).await;
