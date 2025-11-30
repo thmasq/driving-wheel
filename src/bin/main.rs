@@ -55,11 +55,11 @@ const T1H_NS: u32 = 850;
 const T1L_NS: u32 = CODE_PERIOD_NS - T1H_NS;
 const BUFFER_SIZE: usize = 25;
 
-const V_MIN: f32 = 661.8;
-const V_MAX: f32 = 1135.5;
-const POLY_A: f32 = -2.429_344_2e-6;
-const POLY_B: f32 = 6.477_230_7e-3;
-const POLY_C: f32 = -3.222_632_4;
+const V_MIN: f32 = 652.9;
+const V_MAX: f32 = 1068.7;
+const POLY_A: f32 = -3.71488240e-06;
+const POLY_B: f32 = 8.80067475e-03;
+const POLY_C: f32 = -4.16248326e+00;
 const FILTER_ALPHA: f32 = 0.2;
 const TOUCH_THRESHOLD: u32 = 40_000;
 
