@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
+#![allow(clippy::inline_always)]
 
 use core::ptr::{read_volatile, write_volatile};
 
@@ -214,7 +215,6 @@ impl TouchSensorLL {
 
     /// Configures a GPIO pin to Analog mode (Input disable, Output disable, Pulls disable).
     /// This is required before enabling the Touch functionality on a pin.
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn gpio_set_analog(gpio_num: u32) {
         // 1. Disable GPIO Output by writing to W1TC (Write 1 To Clear) register
@@ -247,7 +247,6 @@ impl TouchSensorLL {
     // Core Control & Interrupts
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn enable_clock_gate(enable: bool) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -260,7 +259,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn reset_module() {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -271,7 +269,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn interrupt_enable(mask: u32) {
         let addr = RTC_CNTL_INT_ENA_REG as *mut u32;
@@ -280,7 +277,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn interrupt_disable(mask: u32) {
         let addr = RTC_CNTL_INT_ENA_REG as *mut u32;
@@ -289,7 +285,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn interrupt_clear(mask: u32) {
         unsafe {
@@ -300,9 +295,8 @@ impl TouchSensorLL {
         };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_intr_status_mask() -> u32 {
         (unsafe { read_volatile(RTC_CNTL_INT_ST_REG as *const u32) }) & TOUCH_LL_INTR_MASK_ALL
     }
@@ -311,25 +305,22 @@ impl TouchSensorLL {
     // Status Info
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_current_meas_channel() -> u32 {
         let val = unsafe { read_volatile(SENS_SAR_TOUCH_STATUS0_REG as *const u32) };
         (val >> 22) & 0xF // TOUCH_SCAN_CURR
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn is_measure_done() -> bool {
         let val = unsafe { read_volatile(SENS_SAR_TOUCH_CHN_ST_REG as *const u32) };
         (val & SENS_TOUCH_MEAS_DONE) != 0
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_active_channel_mask() -> u32 {
         let val = unsafe { read_volatile(SENS_SAR_TOUCH_CHN_ST_REG as *const u32) };
         val & SENS_TOUCH_ACTIVE_MASK
@@ -339,7 +330,6 @@ impl TouchSensorLL {
     // Measurement Config
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn enable_scan_mask(chan_mask: u16, enable: bool) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -353,7 +343,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_chan_active_threshold(touch_num: u32, thresh: u32) {
         if touch_num == 0 || touch_num > 14 {
@@ -363,9 +352,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr as *mut u32, thresh & 0x003F_FFFF) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_chan_active_threshold(touch_num: u32) -> u32 {
         if touch_num == 0 || touch_num > 14 {
             return 0;
@@ -374,7 +362,6 @@ impl TouchSensorLL {
         (unsafe { read_volatile(addr as *const u32) }) & 0x003F_FFFF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_power_on_wait_cycle(wait_cycles: u8) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -384,15 +371,13 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_power_on_wait_cycle() -> u8 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         (val & 0xFF) as u8
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_charge_times(charge_times: u16) {
         let addr = RTC_CNTL_TOUCH_CTRL1_REG as *mut u32;
@@ -402,15 +387,13 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_charge_times() -> u16 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL1_REG as *const u32) };
         ((val >> 16) & 0xFFFF) as u16
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_measure_interval_ticks(interval: u16) {
         let addr = RTC_CNTL_TOUCH_CTRL1_REG as *mut u32;
@@ -420,15 +403,13 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_measure_interval_ticks() -> u16 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL1_REG as *const u32) };
         (val & 0xFFFF) as u16
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_charge_speed(touch_num: u32, speed: TouchChargeSpeed) {
         if touch_num > 14 {
@@ -446,9 +427,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_charge_speed(touch_num: u32) -> TouchChargeSpeed {
         if touch_num > 14 {
             return TouchChargeSpeed::Speed0; // Default or Error
@@ -474,7 +454,6 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_voltage_high(limit: TouchVoltLimHigh) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -484,9 +463,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_voltage_high() -> TouchVoltLimHigh {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         #[allow(clippy::match_same_arms)]
@@ -499,7 +477,6 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_voltage_low(limit: TouchVoltLimLow) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -509,9 +486,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_voltage_low() -> TouchVoltLimLow {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         #[allow(clippy::match_same_arms)]
@@ -524,7 +500,6 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_voltage_attenuation(atten: TouchVoltAtten) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -534,9 +509,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_voltage_attenuation() -> TouchVoltAtten {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         #[allow(clippy::match_same_arms)]
@@ -549,7 +523,6 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_init_charge_voltage(touch_num: u32, init_volt: TouchInitChargeVolt) {
         if touch_num > 14 {
@@ -570,7 +543,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_idle_channel_connection(conn: TouchIdleConn) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -583,7 +555,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn enable_channel_mask(enable_mask: u16) {
         // Enable in SENS (OUTEN)
@@ -599,7 +570,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(rtc_addr, rtc_val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn clear_channel_mask(disable_mask: u16) {
         let sens_addr = SENS_SAR_TOUCH_CONF_REG as *mut u32;
@@ -613,7 +583,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(rtc_addr, rtc_val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_timeout(timeout_cycles: u32) {
         let addr = RTC_CNTL_TOUCH_TIMEOUT_CTRL_REG as *mut u32;
@@ -628,9 +597,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_timeout() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_TIMEOUT_CTRL_REG as *const u32) };
         if (val & RTC_CNTL_TOUCH_TIMEOUT_EN) != 0 {
@@ -640,7 +608,6 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn clear_active_channel_status() {
         let addr = SENS_SAR_TOUCH_CONF_REG as *mut u32;
@@ -651,7 +618,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_bias_type(bias_type: TouchBiasType) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -668,7 +634,6 @@ impl TouchSensorLL {
     // FSM Operation
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn force_done_curr_measurement() {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -679,7 +644,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn enable_fsm_timer(enable: bool) {
         unsafe { Self::force_done_curr_measurement() };
@@ -694,7 +658,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn start_fsm_repeated_timer() {
         unsafe { Self::force_done_curr_measurement() };
@@ -705,7 +668,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn stop_fsm_repeated_timer() {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -715,15 +677,13 @@ impl TouchSensorLL {
         unsafe { Self::force_done_curr_measurement() };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn is_fsm_repeated_timer_enabled() -> bool {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         (val & RTC_CNTL_TOUCH_SLP_TIMER_EN) != 0
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn trigger_oneshot_measurement() {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -738,7 +698,6 @@ impl TouchSensorLL {
     // Benchmark / Data
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn reset_benchmark(touch_num: u32) {
         let addr = SENS_SAR_TOUCH_CHN_ST_REG as *mut u32;
@@ -754,7 +713,6 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn sleep_reset_benchmark() {
         let addr = RTC_CNTL_TOUCH_APPROACH_REG as *mut u32;
@@ -763,9 +721,8 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn read_raw_data(touch_num: u32) -> u32 {
         if touch_num == 0 || touch_num > 14 {
             return 0;
@@ -780,9 +737,8 @@ impl TouchSensorLL {
         (unsafe { read_volatile(status_addr as *const u32) }) & 0x003F_FFFF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn read_benchmark(touch_num: u32) -> u32 {
         if touch_num == 0 || touch_num > 14 {
             return 0;
@@ -798,9 +754,8 @@ impl TouchSensorLL {
         (unsafe { read_volatile(status_addr as *const u32) }) & 0x003F_FFFF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn read_smooth_data(touch_num: u32) -> u32 {
         if touch_num == 0 || touch_num > 14 {
             return 0;
@@ -820,7 +775,6 @@ impl TouchSensorLL {
     // Filter Configuration
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn filter_enable(enable: bool) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -833,7 +787,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_filter_mode(mode: TouchFilterMode) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -843,7 +796,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_jitter_step(step: u32) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -853,7 +805,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_smooth_mode(mode: TouchSmoothMode) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -863,7 +814,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_debounce(debounce: u32) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -873,7 +823,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_denoise_level(denoise_lvl: u8) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -918,7 +867,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_filter_active_hysteresis(hysteresis: u32) {
         let addr = RTC_CNTL_TOUCH_FILTER_CTRL_REG as *mut u32;
@@ -933,7 +881,6 @@ impl TouchSensorLL {
     // Waterproof & Proximity
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn waterproof_enable(enable: bool) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -946,7 +893,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_waterproof_guard_chan(pad_num: u32) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -956,7 +902,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_shield_driver(driver_level: u32) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -966,7 +911,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_proximity_sensing_channel(prox_chan: u8, touch_num: u32) {
         let addr = SENS_SAR_TOUCH_CONF_REG as *mut u32;
@@ -982,7 +926,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn set_proximity_scan_times(times: u32) {
         let addr = RTC_CNTL_TOUCH_APPROACH_REG as *mut u32;
@@ -992,17 +935,15 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_proximity_total_scan_times() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_APPROACH_REG as *const u32) };
         (val >> 24) & 0xFF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_proximity_curr_scan_cnt(touch_num: u32) -> u32 {
         // Read configuration to see which Proximity Pad Slot (0,1,2) the touch_num is assigned to
         let conf_val = unsafe { read_volatile(SENS_SAR_TOUCH_CONF_REG as *const u32) };
@@ -1027,7 +968,6 @@ impl TouchSensorLL {
     // Denoise Channel
     // -------------------------------------------------------------------------
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn denoise_enable(enable: bool) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -1040,7 +980,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn denoise_set_cap(cap: TouchDenoiseCap) {
         let addr = RTC_CNTL_TOUCH_CTRL2_REG as *mut u32;
@@ -1050,7 +989,6 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub unsafe fn denoise_set_resolution(res: TouchDenoiseRes) {
         let addr = RTC_CNTL_TOUCH_SCAN_CTRL_REG as *mut u32;
@@ -1060,16 +998,14 @@ impl TouchSensorLL {
         unsafe { write_volatile(addr, val) };
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn denoise_read_data() -> u32 {
         (unsafe { read_volatile(SENS_SAR_TOUCH_DENOISE_REG as *const u32) }) & 0x003F_FFFF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn proximity_pad_check(touch_num: u32) -> bool {
         let conf_val = unsafe { read_volatile(SENS_SAR_TOUCH_CONF_REG as *const u32) };
 
@@ -1081,9 +1017,8 @@ impl TouchSensorLL {
         (touch_num == pad0) || (touch_num == pad1) || (touch_num == pad2)
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_filter_mode() -> TouchFilterMode {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_FILTER_CTRL_REG as *const u32) };
         let mode = (val >> 28) & 0x7;
@@ -1101,9 +1036,8 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_smooth_mode() -> TouchSmoothMode {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_FILTER_CTRL_REG as *const u32) };
         let mode = (val >> 9) & 0x3;
@@ -1117,33 +1051,29 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_debounce() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_FILTER_CTRL_REG as *const u32) };
         (val >> 25) & 0x7
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_noise_threshold() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_FILTER_CTRL_REG as *const u32) };
         (val >> 21) & 0x3
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_jitter_step() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_FILTER_CTRL_REG as *const u32) };
         (val >> 11) & 0xF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn denoise_get_cap() -> TouchDenoiseCap {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         let cap = (val >> 9) & 0x7;
@@ -1161,9 +1091,8 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn denoise_get_resolution() -> TouchDenoiseRes {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_SCAN_CTRL_REG as *const u32) };
         let res = val & 0x3;
@@ -1177,34 +1106,30 @@ impl TouchSensorLL {
         }
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn waterproof_get_guard_chan() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_SCAN_CTRL_REG as *const u32) };
         (val >> 28) & 0xF
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn waterproof_get_shield_driver() -> u32 {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_SCAN_CTRL_REG as *const u32) };
         (val >> 25) & 0x7
     }
 
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_clock_gate_state() -> bool {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         (val & RTC_CNTL_TOUCH_CLKGATE_EN) != 0
     }
 
     /// Returns true if FSM is in Software Trigger Mode, false if Timer Trigger Mode.
-    #[allow(clippy::inline_always)]
     #[inline(always)]
-    #[must_use] 
+    #[must_use]
     pub unsafe fn get_fsm_mode() -> bool {
         let val = unsafe { read_volatile(RTC_CNTL_TOUCH_CTRL2_REG as *const u32) };
         (val & RTC_CNTL_TOUCH_START_FORCE) != 0
