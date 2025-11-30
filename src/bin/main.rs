@@ -7,7 +7,8 @@
     clippy::cast_sign_loss
 )]
 
-use defmt::{Format, info, warn};
+use defmt::{info, warn};
+use driving_wheel::smart_led::{RGB8, SmartLed};
 use driving_wheel::touch::{
     self, TouchChannel, TouchChannelConfig, TouchInterrupts, TouchPin, TouchSensor, pin_state,
     sensor_state,
@@ -22,7 +23,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::gpio::Level;
 use esp_hal::interrupt::{self, IsrCallback, Priority};
 use esp_hal::peripherals::Interrupt;
-use esp_hal::rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator};
+use esp_hal::rmt::{Rmt, TxChannelConfig};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use panic_rtt_target as _;
@@ -37,28 +38,6 @@ extern "C" fn rtc_core_isr() {
     TOUCH_SIGNAL.signal(());
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Format)]
-pub struct RGB8 {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-impl RGB8 {
-    #[must_use]
-    pub fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-}
-
-// WS2812 timing constants
-const CODE_PERIOD_NS: u32 = 1250;
-const T0H_NS: u32 = 400;
-const T0L_NS: u32 = CODE_PERIOD_NS - T0H_NS;
-const T1H_NS: u32 = 850;
-const T1L_NS: u32 = CODE_PERIOD_NS - T1H_NS;
-const BUFFER_SIZE: usize = 25;
-
 const V_MIN: f32 = 652.9;
 const V_MAX: f32 = 1068.7;
 const POLY_A: f32 = -3.714_882_5e-6;
@@ -66,40 +45,6 @@ const POLY_B: f32 = 8.800_675e-3;
 const POLY_C: f32 = -4.162_483;
 const FILTER_ALPHA: f32 = 0.2;
 const TOUCH_THRESHOLD: u32 = 40_000;
-
-fn led_pulses_for_clock(src_clock_mhz: u32) -> (PulseCode, PulseCode) {
-    (
-        PulseCode::new(
-            Level::High,
-            ((T0H_NS * src_clock_mhz) / 1000) as u16,
-            Level::Low,
-            ((T0L_NS * src_clock_mhz) / 1000) as u16,
-        ),
-        PulseCode::new(
-            Level::High,
-            ((T1H_NS * src_clock_mhz) / 1000) as u16,
-            Level::Low,
-            ((T1L_NS * src_clock_mhz) / 1000) as u16,
-        ),
-    )
-}
-
-fn ws2812_encode(
-    color: RGB8,
-    pulses: (PulseCode, PulseCode),
-    rmt_buffer: &mut [PulseCode; BUFFER_SIZE],
-) {
-    let bytes = [color.g, color.r, color.b];
-    let mut idx = 0;
-    for &byte in &bytes {
-        for bit in (0..8).rev() {
-            let is_set = (byte & (1 << bit)) != 0;
-            rmt_buffer[idx] = if is_set { pulses.1 } else { pulses.0 };
-            idx += 1;
-        }
-    }
-    rmt_buffer[24] = PulseCode::new(Level::Low, 0, Level::Low, 0);
-}
 
 fn calculate_throttle(voltage_mv: f32) -> u8 {
     let v = voltage_mv.clamp(V_MIN, V_MAX);
@@ -174,16 +119,13 @@ async fn main(spawner: Spawner) -> ! {
         .with_carrier_modulation(false)
         .with_idle_output(true);
 
-    let channel_creator = rmt.channel0;
-    let mut channel = channel_creator
-        .configure_tx(peripherals.GPIO48, tx_config)
+    let src_clock_mhz = esp_hal::clock::Clocks::get().apb_clock.as_mhz();
+    let led_driver_uninit = SmartLed::new(rmt.channel0, peripherals.GPIO48);
+    let mut led_driver = led_driver_uninit
+        .initialize(tx_config, src_clock_mhz)
         .unwrap();
 
-    let src_clock_mhz = esp_hal::clock::Clocks::get().apb_clock.as_mhz();
-    let pulses = led_pulses_for_clock(src_clock_mhz);
-
     let _ = spawner;
-    let mut rmt_buffer = [PulseCode::default(); BUFFER_SIZE];
     let mut filtered_mv: f32 = V_MIN;
     let mut is_paused = false;
 
@@ -208,9 +150,8 @@ async fn main(spawner: Spawner) -> ! {
 
                         let throttle = calculate_throttle(filtered_mv);
                         let color = throttle_to_color(throttle);
-                        ws2812_encode(color, pulses, &mut rmt_buffer);
 
-                        match channel.transmit(&rmt_buffer).await {
+                        match led_driver.write(color).await {
                             Ok(()) => {}
                             Err(e) => {
                                 warn!("RMT Transmit Error: {:?}", e);
