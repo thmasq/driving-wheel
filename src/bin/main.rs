@@ -15,7 +15,6 @@ use esp_hal::gpio::Level;
 use esp_hal::rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
-use nb;
 use panic_rtt_target as _;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -29,6 +28,7 @@ pub struct RGB8 {
 }
 
 impl RGB8 {
+    #[must_use] 
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
@@ -46,23 +46,23 @@ const BUFFER_SIZE: usize = 25;
 
 const V_MIN: f32 = 661.8;
 const V_MAX: f32 = 1135.5;
-const POLY_A: f32 = -2.42934423e-06;
-const POLY_B: f32 = 6.47723058e-03;
-const POLY_C: f32 = -3.22263236e+00;
+const POLY_A: f32 = -2.429_344_2e-6;
+const POLY_B: f32 = 6.477_230_7e-3;
+const POLY_C: f32 = -3.222_632_4;
 const FILTER_ALPHA: f32 = 0.2;
 
 fn led_pulses_for_clock(src_clock_mhz: u32) -> (PulseCode, PulseCode) {
     (
         PulseCode::new(
-            Level::High.into(),
+            Level::High,
             ((T0H_NS * src_clock_mhz) / 1000) as u16,
-            Level::Low.into(),
+            Level::Low,
             ((T0L_NS * src_clock_mhz) / 1000) as u16,
         ),
         PulseCode::new(
-            Level::High.into(),
+            Level::High,
             ((T1H_NS * src_clock_mhz) / 1000) as u16,
-            Level::Low.into(),
+            Level::Low,
             ((T1L_NS * src_clock_mhz) / 1000) as u16,
         ),
     )
@@ -76,14 +76,14 @@ fn ws2812_encode(
     let bytes = [color.g, color.r, color.b];
     let mut idx = 0;
 
-    for &byte in bytes.iter() {
+    for &byte in &bytes {
         for bit in (0..8).rev() {
             let is_set = (byte & (1 << bit)) != 0;
             rmt_buffer[idx] = if is_set { pulses.1 } else { pulses.0 };
             idx += 1;
         }
     }
-    rmt_buffer[24] = PulseCode::new(Level::Low.into(), 0, Level::Low.into(), 0); // Delimiter
+    rmt_buffer[24] = PulseCode::new(Level::Low, 0, Level::Low, 0); // Delimiter
 }
 
 fn calculate_throttle(voltage_mv: f32) -> u8 {
@@ -100,7 +100,7 @@ fn calculate_throttle(voltage_mv: f32) -> u8 {
 }
 
 fn throttle_to_color(throttle: u8) -> RGB8 {
-    let t = throttle as f32 / 100.0;
+    let t = f32::from(throttle) / 100.0;
     // Blue for 0% (Idle), Red for 100% (Full)
     let r = (255.0 * t) as u8;
     let b = (255.0 * (1.0 - t)) as u8;
@@ -154,7 +154,7 @@ async fn main(spawner: Spawner) -> ! {
 
     loop {
         let raw: u16 = nb::block!(adc.read_oneshot(&mut adc_pin)).unwrap();
-        let current_mv = (raw as f32 / 4095.0) * 3300.0;
+        let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
 
         // Apply EMA Filter: New = Old + Alpha * (New - Old)
         filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
