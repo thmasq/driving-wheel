@@ -24,16 +24,9 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 static TOUCH_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
-// ----------------------------------------------------------------------------
-// Interrupt Handler (Fixed for esp-hal 1.0.0 bind_interrupt)
-// ----------------------------------------------------------------------------
-// 1. We remove #[handler] because we are manually binding it.
-// 2. We use #[esp_hal::ram] to place it in IRAM (best practice for ISRs).
-// 3. We use extern "C" to match the C-ABI expected by the hardware/HAL.
 #[esp_hal::ram]
 extern "C" fn rtc_core_isr() {
     unsafe {
-        // Critical: Disable interrupt immediately to prevent "Interrupt Storm"
         TouchSensorLL::interrupt_disable(TOUCH_LL_INTR_MASK_ACTIVE);
         TouchSensorLL::interrupt_clear(TOUCH_LL_INTR_MASK_ACTIVE);
     }
@@ -127,13 +120,11 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // --- Touch Sensor Init ---
     let mut touch_sensor = TouchSensor::new();
     let touch_pin_14 = TouchPin::new(TouchChannel::Num14).into_analog();
     touch_sensor.config_channel(&touch_pin_14);
     touch_sensor.set_threshold(TouchChannel::Num14, TOUCH_THRESHOLD);
 
-    // Configure interrupt hardware
     touch_sensor.interrupt_enable(TOUCH_LL_INTR_MASK_ACTIVE);
 
     unsafe {
@@ -144,7 +135,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut touch = touch_sensor.start();
     info!("Touch Sensor initialized and bound");
 
-    // --- ADC Init ---
     let mut adc_config = AdcConfig::new();
     let analog_pin = peripherals.GPIO4;
     let mut adc_pin =
@@ -176,7 +166,6 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Starting Main Loop...");
 
-    // Helper: Wait for physical release (value > threshold) and then re-arm interrupt
     async fn wait_for_release_and_rearm(
         touch: &mut TouchSensor<driving_wheel::touch::sensor_state::Running>,
     ) {
