@@ -1,0 +1,44 @@
+[package]
+name = "driving-wheel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[[bin]]
+name = "driving-wheel"
+path = "./src/bin/main.rs"
+
+[dependencies]
+esp-hal = { version = "1.0.0", features = ["defmt", "esp32s3", "unstable"] }
+esp-rtos = { version = "0.2.0", features = ["defmt", "embassy", "esp-alloc", "esp-radio", "esp32s3"] }
+defmt = "1.0.1"
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32s3"] }
+
+# for more networking protocol support see https://crates.io/crates/edge-net
+embassy-executor = { version = "0.9.1", features = ["defmt"] }
+embassy-net = { version = "0.7.1", features = ["defmt", "dhcpv4", "medium-ethernet", "tcp", "udp"] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+embedded-io = { version = "0.7.1", features = ["defmt"] }
+embedded-io-async = { version = "0.7.0", features = ["defmt"] }
+esp-alloc = { version = "0.9.0", features = ["defmt"] }
+esp-radio = { version = "0.17.0", features = ["defmt", "esp-alloc", "esp32s3", "smoltcp", "unstable", "wifi"] }
+rtt-target = { version = "0.6.2", features = ["defmt"] }
+smoltcp = { version = "0.12.0", default-features = false, features = ["defmt", "medium-ethernet", "multicast", "proto-dhcpv4", "proto-dns", "proto-ipv4", "socket-dns", "socket-icmp", "socket-raw", "socket-tcp", "socket-udp"] }
+
+critical-section = "1.2.0"
+static_cell = "2.1.1"
+mpu6050-dmp = { version = "0.6.1", features = ["async", "defmt-03"] }
+nb = { version = "1.1.0", features = ["defmt-0-3"] }
+panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
