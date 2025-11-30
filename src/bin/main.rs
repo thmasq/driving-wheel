@@ -7,11 +7,19 @@
 )]
 
 use defmt::{Format, info};
+use driving_wheel::esp32s3_touch_ll::TouchSensorLL; // Needed for ISR
+use driving_wheel::touch::{TOUCH_LL_INTR_MASK_ACTIVE, TouchChannel, TouchPin, TouchSensor};
 use embassy_executor::Spawner;
+use embassy_futures::select::{Either, select};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::Level;
+use esp_hal::handler;
+use esp_hal::interrupt::{self, Priority};
+use esp_hal::peripherals::Interrupt;
 use esp_hal::rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
@@ -19,6 +27,25 @@ use panic_rtt_target as _;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// Global Signal to notify the async task from the Interrupt Context
+static TOUCH_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+// ----------------------------------------------------------------------------
+// Interrupt Handler
+// ----------------------------------------------------------------------------
+#[handler]
+fn rtc_core_isr() {
+    unsafe {
+        // 1. Clear the interrupt status in the Touch Controller immediately
+        // We use the LL driver here because we cannot access the high-level 'TouchSensor'
+        // struct (which owns the state) from a static ISR context easily.
+        TouchSensorLL::interrupt_clear(TOUCH_LL_INTR_MASK_ACTIVE);
+    }
+
+    // 2. Notify the main loop
+    TOUCH_SIGNAL.signal(());
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Format)]
 pub struct RGB8 {
@@ -50,6 +77,9 @@ const POLY_A: f32 = -2.429_344_2e-6;
 const POLY_B: f32 = 6.477_230_7e-3;
 const POLY_C: f32 = -3.222_632_4;
 const FILTER_ALPHA: f32 = 0.2;
+
+// Touch threshold - adjust based on your hardware calibration
+const TOUCH_THRESHOLD: u32 = 40_000;
 
 fn led_pulses_for_clock(src_clock_mhz: u32) -> (PulseCode, PulseCode) {
     (
@@ -127,14 +157,39 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // Initialize ADC for hall effect sensor on GPIO4
+    // --- Initialize Touch Sensor with Interrupts ---
+    let mut touch_sensor = TouchSensor::new();
+
+    // 1. Select Pin 14 (Touch14) and initialize it as Analog
+    let touch_pin_14 = TouchPin::new(TouchChannel::Num14).into_analog();
+
+    // 2. Configure the channel
+    touch_sensor.config_channel(&touch_pin_14);
+
+    // 3. Set Threshold for Interrupt
+    // Note: "Active" interrupt triggers when value < benchmark * threshold (approx logic)
+    // You might need to tune this or the 'active threshold' register depending on behavior
+    touch_sensor.set_threshold(TouchChannel::Num14, TOUCH_THRESHOLD);
+
+    // 4. Enable "Active" Interrupt (Triggers when touched)
+    touch_sensor.interrupt_enable(TOUCH_LL_INTR_MASK_ACTIVE);
+
+    // 5. Bind the Global RTC Interrupt to our handler
+    interrupt::enable(Interrupt::RTC_CORE, Priority::Priority1).unwrap();
+
+    // 6. Start the Touch FSM
+    let _touch = touch_sensor.start();
+
+    info!("Touch Sensor initialized with Interrupts on Ch14");
+
+    // Initialize ADC
     let mut adc_config = AdcConfig::new();
     let analog_pin = peripherals.GPIO4;
     let mut adc_pin =
         adc_config.enable_pin_with_cal::<_, AdcCalCurve<_>>(analog_pin, Attenuation::_6dB);
     let mut adc = Adc::new(peripherals.ADC1, adc_config);
 
-    // Initialize RMT for WS2812 control
+    // Initialize RMT
     let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
     let tx_config = TxChannelConfig::default()
         .with_clk_divider(1)
@@ -146,39 +201,57 @@ async fn main(spawner: Spawner) -> ! {
         .configure_tx(peripherals.GPIO48, tx_config)
         .unwrap();
 
-    // Precompute pulses based on actual clock
     let src_clock_mhz = esp_hal::clock::Clocks::get().apb_clock.as_mhz();
     let pulses = led_pulses_for_clock(src_clock_mhz);
 
-    info!("WS2812 LED initialized on GPIO48, ADC on GPIO4");
-
     let _ = spawner;
-
     let mut rmt_buffer = [PulseCode::default(); BUFFER_SIZE];
-
-    // Initialize filter state with the resting voltage (approximate)
     let mut filtered_mv: f32 = V_MIN;
+    let mut is_paused = false;
+
+    info!("Starting Main Loop...");
 
     loop {
-        let raw: u16 = nb::block!(adc.read_oneshot(&mut adc_pin)).unwrap();
-        let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
+        if is_paused {
+            // If paused, we ONLY wait for the touch signal to resume
+            info!("System Paused. Waiting for touch to resume...");
+            TOUCH_SIGNAL.wait().await; // Asynchronously sleep until ISR fires
+            is_paused = false;
+            info!("Touch detected: Resuming system.");
+            // Debounce slightly to prevent immediate re-pause on same touch
+            Timer::after(Duration::from_millis(500)).await;
+        } else {
+            // If running, we race two futures:
+            // 1. The Update Interval Timer (10ms)
+            // 2. The Touch Signal (Interrupt)
+            let update_future = Timer::after(Duration::from_millis(10));
+            let touch_future = TOUCH_SIGNAL.wait();
 
-        // Apply EMA Filter: New = Old + Alpha * (New - Old)
-        filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
+            match select(update_future, touch_future).await {
+                Either::First(_) => {
+                    // --- Timer expired, run update logic ---
+                    let raw: u16 = nb::block!(adc.read_oneshot(&mut adc_pin)).unwrap();
+                    let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
+                    filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
 
-        let throttle = calculate_throttle(filtered_mv);
-        let color = throttle_to_color(throttle);
+                    let throttle = calculate_throttle(filtered_mv);
+                    let color = throttle_to_color(throttle);
 
-        ws2812_encode(color, pulses, &mut rmt_buffer);
+                    ws2812_encode(color, pulses, &mut rmt_buffer);
+                    let transaction = channel.transmit(&rmt_buffer).unwrap();
+                    channel = transaction.wait().unwrap();
 
-        let transaction = channel.transmit(&rmt_buffer).unwrap();
-        channel = transaction.wait().unwrap();
-
-        info!(
-            "Raw: {}mV | Filtered: {}mV | Throttle: {}% | LED: R={}, B={}",
-            current_mv as u32, filtered_mv as u32, throttle, color.r, color.b
-        );
-
-        Timer::after(Duration::from_millis(10)).await;
+                    // Optional log reduction
+                    // info!("Throttle: {}%", throttle);
+                }
+                Either::Second(_) => {
+                    // --- Touch Interrupt fired ---
+                    info!("Touch detected: Pausing system.");
+                    is_paused = true;
+                    // Debounce
+                    Timer::after(Duration::from_millis(500)).await;
+                }
+            }
+        }
     }
 }
