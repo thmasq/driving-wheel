@@ -6,11 +6,18 @@
 
 use core::ptr::{read_volatile, write_volatile};
 
+// =============================================================================
 // Register Base Addresses
+// =============================================================================
 pub const DR_REG_RTCCNTL_BASE: u32 = 0x6000_8000;
 pub const DR_REG_SENS_BASE: u32 = 0x6000_8800;
 pub const DR_REG_RTCIO_BASE: u32 = 0x6000_8400;
+pub const DR_REG_GPIO_BASE: u32 = 0x6000_4000;
+pub const DR_REG_IO_MUX_BASE: u32 = 0x6000_9000;
 
+// =============================================================================
+// RTC / Touch Registers
+// =============================================================================
 pub const RTC_CNTL_INT_ENA_REG: u32 = DR_REG_RTCCNTL_BASE + 0x40;
 pub const RTC_CNTL_INT_ST_REG: u32 = DR_REG_RTCCNTL_BASE + 0x48;
 pub const RTC_CNTL_INT_CLR_REG: u32 = DR_REG_RTCCNTL_BASE + 0x4C;
@@ -33,7 +40,29 @@ pub const SENS_SAR_TOUCH_SLP_STATUS_REG: u32 = DR_REG_SENS_BASE + 0xDC;
 
 pub const RTC_IO_TOUCH_PAD0_REG: u32 = DR_REG_RTCIO_BASE + 0x84;
 
+pub const GPIO_ENABLE_W1TC_REG: u32 = DR_REG_GPIO_BASE + 0x0028;
+
+// Bit masks for IO MUX registers
+pub const SLP_OE: u32 = 1 << 0;
+pub const SLP_IE: u32 = 1 << 4;
+pub const FUN_PD: u32 = 1 << 7; // Pulldown enable
+pub const FUN_PU: u32 = 1 << 8; // Pullup enable
+pub const FUN_IE: u32 = 1 << 9; // Input enable
+pub const FUN_DRV_S: u32 = 10;
+pub const MCU_SEL_S: u32 = 12;
+pub const MCU_SEL_M: u32 = 0x7 << MCU_SEL_S;
+
+/// Helper to calculate the IO MUX register address for a specific GPIO.
+/// Note: On ESP32-S3, GPIOs 0-21 are sequential (0x04, 0x08...).
+/// Touch pads 1-14 correspond to GPIOs 1-14, so this simple linear calculation
+/// is safe for all valid touch channels.
+const fn get_io_mux_reg(gpio_num: u32) -> u32 {
+    DR_REG_IO_MUX_BASE + 0x04 + (gpio_num * 4)
+}
+
+// =============================================================================
 // Interrupt Masks
+// =============================================================================
 pub const TOUCH_LL_INTR_MASK_SCAN_DONE: u32 = 1 << 4;
 pub const TOUCH_LL_INTR_MASK_DONE: u32 = 1 << 6;
 pub const TOUCH_LL_INTR_MASK_ACTIVE: u32 = 1 << 7;
@@ -47,7 +76,9 @@ pub const TOUCH_LL_INTR_MASK_ALL: u32 = TOUCH_LL_INTR_MASK_SCAN_DONE
     | TOUCH_LL_INTR_MASK_TIMEOUT
     | TOUCH_LL_INTR_MASK_PROX_DONE;
 
-// Register Field Masks
+// =============================================================================
+// Register Field Masks (Touch)
+// =============================================================================
 pub const RTC_CNTL_TOUCH_CLKGATE_EN: u32 = 1 << 31;
 pub const RTC_CNTL_TOUCH_RESET: u32 = 1 << 29;
 pub const RTC_CNTL_TOUCH_TIMER_FORCE_DONE: u32 = 3 << 27;
@@ -177,6 +208,41 @@ pub enum TouchBiasType {
 pub struct TouchSensorLL;
 
 impl TouchSensorLL {
+    // -------------------------------------------------------------------------
+    // GPIO Configuration (Analog Mode)
+    // -------------------------------------------------------------------------
+
+    /// Configures a GPIO pin to Analog mode (Input disable, Output disable, Pulls disable).
+    /// This is required before enabling the Touch functionality on a pin.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    pub unsafe fn gpio_set_analog(gpio_num: u32) {
+        // 1. Disable GPIO Output by writing to W1TC (Write 1 To Clear) register
+        let enable_w1tc = GPIO_ENABLE_W1TC_REG as *mut u32;
+        unsafe { write_volatile(enable_w1tc, 1 << gpio_num) };
+
+        // 2. Configure IO MUX (Function to 0, Disable Input, Disable Pulls)
+        let mux_reg = get_io_mux_reg(gpio_num) as *mut u32;
+        let mut mux_val = unsafe { read_volatile(mux_reg) };
+
+        // Clear MCU_SEL (Function bits 12-14). Function 0 is typically "default/unused"
+        // but functionally we are isolating the digital path.
+        mux_val &= !MCU_SEL_M;
+
+        // Disable Digital Input Buffer
+        mux_val &= !FUN_IE;
+
+        // Disable Internal Pull-up and Pull-down resistors
+        mux_val &= !FUN_PU;
+        mux_val &= !FUN_PD;
+
+        // Disable Sleep Mode Input/Output overrides
+        mux_val &= !SLP_IE;
+        mux_val &= !SLP_OE;
+
+        unsafe { write_volatile(mux_reg, mux_val) };
+    }
+
     // -------------------------------------------------------------------------
     // Core Control & Interrupts
     // -------------------------------------------------------------------------
