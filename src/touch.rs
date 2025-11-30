@@ -29,11 +29,13 @@ pub enum TouchChannel {
 }
 
 impl TouchChannel {
+    #[must_use] 
     pub fn to_u32(self) -> u32 {
         self as u32
     }
 
     /// On ESP32-S3, Touch Channel N corresponds directly to GPIO N.
+    #[must_use] 
     pub fn to_gpio_num(self) -> u32 {
         self as u32
     }
@@ -43,7 +45,7 @@ impl TouchChannel {
 // Typestate Definitions
 // =============================================================================
 
-/// State markers for the TouchSensor controller.
+/// State markers for the `TouchSensor` controller.
 pub mod sensor_state {
     /// Controller is stopped and ready for configuration.
     pub struct Config;
@@ -51,7 +53,7 @@ pub mod sensor_state {
     pub struct Running;
 }
 
-/// State markers for TouchPins.
+/// State markers for `TouchPins`.
 pub mod pin_state {
     /// Pin is in default digital mode (or uninitialized).
     pub struct Digital;
@@ -63,15 +65,16 @@ pub mod pin_state {
 // Pin Wrapper
 // =============================================================================
 
-/// A wrapper around a TouchChannel representing a physical pin in a specific state.
+/// A wrapper around a `TouchChannel` representing a physical pin in a specific state.
 pub struct TouchPin<S> {
     channel: TouchChannel,
     _state: PhantomData<S>,
 }
 
 impl TouchPin<pin_state::Digital> {
-    /// Create a new TouchPin handle for a specific channel.
+    /// Create a new `TouchPin` handle for a specific channel.
     /// Starts in `Digital` (uninitialized) state.
+    #[must_use] 
     pub fn new(channel: TouchChannel) -> Self {
         Self {
             channel,
@@ -83,6 +86,7 @@ impl TouchPin<pin_state::Digital> {
     ///
     /// This physically disables the digital IO buffers and pull-ups/downs on the GPIO,
     /// preparing it for capacitive sensing.
+    #[must_use] 
     pub fn into_analog(self) -> TouchPin<pin_state::Analog> {
         unsafe {
             ll::TouchSensorLL::gpio_set_analog(self.channel.to_gpio_num());
@@ -96,6 +100,7 @@ impl TouchPin<pin_state::Digital> {
 
 impl TouchPin<pin_state::Analog> {
     /// Get the underlying channel enum.
+    #[must_use] 
     pub fn channel(&self) -> TouchChannel {
         self.channel
     }
@@ -158,10 +163,17 @@ pub struct TouchSensor<S> {
     _state: PhantomData<S>,
 }
 
+impl Default for TouchSensor<sensor_state::Config> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TouchSensor<sensor_state::Config> {
-    /// Create a new TouchSensor driver in Config state.
+    /// Create a new `TouchSensor` driver in Config state.
     ///
     /// Performs hardware reset and default initialization matching ESP-IDF defaults.
+    #[must_use] 
     pub fn new() -> Self {
         unsafe {
             // 1. Stop FSM and disable interrupts
@@ -304,7 +316,7 @@ impl TouchSensor<sensor_state::Config> {
     }
 
     /// Set the sleep cycle between measurements.
-    /// The timer frequency is RTC_SLOW_CLK (approx 150k or 32k).
+    /// The timer frequency is `RTC_SLOW_CLK` (approx 150k or 32k).
     /// Range: 0 ~ 0xFF (u8 is sufficient here as per LL but let's accept u16 and cast to be safe or match LL).
     /// LL `set_power_on_wait_cycle` takes `u8`.
     pub fn set_sleep_time(&mut self, sleep_cycle: u8) {
@@ -326,6 +338,7 @@ impl TouchSensor<sensor_state::Config> {
     }
 
     /// Transition to `Running` state by starting the FSM repeated timer.
+    #[must_use] 
     pub fn start(self) -> TouchSensor<sensor_state::Running> {
         unsafe {
             ll::TouchSensorLL::enable_fsm_timer(true);
@@ -339,21 +352,25 @@ impl TouchSensor<sensor_state::Config> {
 
 impl TouchSensor<sensor_state::Running> {
     /// Check if a measurement measurement cycle has completed.
+    #[must_use] 
     pub fn is_measure_done(&self) -> bool {
         unsafe { ll::TouchSensorLL::is_measure_done() }
     }
 
     /// Read raw data.
+    #[must_use] 
     pub fn read_raw(&self, channel: TouchChannel) -> u32 {
         unsafe { ll::TouchSensorLL::read_raw_data(channel.to_u32()) }
     }
 
     /// Read smoothed (filtered) data.
+    #[must_use] 
     pub fn read_smooth(&self, channel: TouchChannel) -> u32 {
         unsafe { ll::TouchSensorLL::read_smooth_data(channel.to_u32()) }
     }
 
     /// Read benchmark value.
+    #[must_use] 
     pub fn read_benchmark(&self, channel: TouchChannel) -> u32 {
         unsafe { ll::TouchSensorLL::read_benchmark(channel.to_u32()) }
     }
@@ -362,11 +379,13 @@ impl TouchSensor<sensor_state::Running> {
     ///
     /// This is useful for proximity sensing where touch channels are configured
     /// to accumulate measurements over time.
+    #[must_use] 
     pub fn get_proximity_count(&self, channel: TouchChannel) -> u32 {
         unsafe { ll::TouchSensorLL::get_proximity_curr_scan_cnt(channel.to_u32()) }
     }
 
     /// Get interrupt status.
+    #[must_use] 
     pub fn get_interrupt_status(&self) -> u32 {
         unsafe { ll::TouchSensorLL::get_intr_status_mask() }
     }
@@ -374,6 +393,7 @@ impl TouchSensor<sensor_state::Running> {
     /// Check if the global 'Scan Done' interrupt flag is set.
     ///
     /// This flag indicates that one complete scan of all enabled channels has finished.
+    #[must_use] 
     pub fn is_scan_done(&self) -> bool {
         let status = self.get_interrupt_status();
         (status & ll::TOUCH_LL_INTR_MASK_SCAN_DONE) != 0
@@ -382,6 +402,7 @@ impl TouchSensor<sensor_state::Running> {
     /// Check if the global 'Done' interrupt flag is set.
     ///
     /// This generally indicates a measurement done event for a channel.
+    #[must_use] 
     pub fn is_done(&self) -> bool {
         let status = self.get_interrupt_status();
         (status & ll::TOUCH_LL_INTR_MASK_DONE) != 0
@@ -391,6 +412,7 @@ impl TouchSensor<sensor_state::Running> {
     ///
     /// This indicates that at least one channel has been activated (touched).
     /// You can check individual channel status via `is_channel_active`.
+    #[must_use] 
     pub fn is_active(&self) -> bool {
         let status = self.get_interrupt_status();
         (status & ll::TOUCH_LL_INTR_MASK_ACTIVE) != 0
@@ -399,18 +421,21 @@ impl TouchSensor<sensor_state::Running> {
     /// Check if the global 'Inactive' interrupt flag is set.
     ///
     /// This indicates that at least one channel has been released.
+    #[must_use] 
     pub fn is_inactive(&self) -> bool {
         let status = self.get_interrupt_status();
         (status & ll::TOUCH_LL_INTR_MASK_INACTIVE) != 0
     }
 
     /// Check if the 'Timeout' interrupt flag is set.
+    #[must_use] 
     pub fn is_timeout(&self) -> bool {
         let status = self.get_interrupt_status();
         (status & ll::TOUCH_LL_INTR_MASK_TIMEOUT) != 0
     }
 
     /// Check if a specific channel is currently active (touched).
+    #[must_use] 
     pub fn is_channel_active(&self, channel: TouchChannel) -> bool {
         unsafe {
             let mask = ll::TouchSensorLL::get_active_channel_mask();
@@ -424,6 +449,7 @@ impl TouchSensor<sensor_state::Running> {
     }
 
     /// Stop the FSM and return to `Config` state.
+    #[must_use] 
     pub fn stop(self) -> TouchSensor<sensor_state::Config> {
         unsafe {
             ll::TouchSensorLL::stop_fsm_repeated_timer();
