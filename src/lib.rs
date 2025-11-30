@@ -1,2 +1,3 @@
 #![no_std]
-mod esp32s3_touch_ll;
+pub mod esp32s3_touch_ll;
+pub mod touch;
