@@ -52,22 +52,34 @@ fn calculate_throttle(voltage_mv: f32) -> u8 {
     ((t.clamp(0.0, 1.0)) * 100.0) as u8
 }
 
-fn throttle_to_color(throttle: u8) -> RGB8 {
+fn get_mode_color(throttle: u8, is_forward: bool) -> RGB8 {
     let t = f32::from(throttle) / 100.0;
-    let r = (255.0 * t) as u8;
-    let b = (255.0 * (1.0 - t)) as u8;
-    RGB8::new(r, 0, b)
+    let intensity = (255.0 * t) as u8;
+
+    if is_forward {
+        RGB8::new(0, intensity, 0) // Green
+    } else {
+        RGB8::new(intensity, 0, 0) // Red
+    }
 }
 
 async fn wait_for_release_and_rearm(
     touch: &mut TouchSensor<sensor_state::Running>,
     pin: &TouchPin<pin_state::Analog>,
 ) {
+    let mut steady_count = 0;
+
     loop {
         if !touch.is_channel_active(pin.channel()) {
+            steady_count += 1;
+        } else {
+            steady_count = 0;
+        }
+
+        if steady_count >= 3 {
             break;
         }
-        Timer::after(Duration::from_millis(50)).await;
+        Timer::after(Duration::from_millis(20)).await;
     }
 
     touch.clear_interrupts(TouchInterrupts::ACTIVE);
@@ -82,6 +94,7 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
+    Timer::after(Duration::from_millis(100)).await;
     info!("Embassy initialized!");
 
     let mut touch_sensor = TouchSensor::new();
@@ -127,43 +140,42 @@ async fn main(spawner: Spawner) -> ! {
 
     let _ = spawner;
     let mut filtered_mv: f32 = V_MIN;
-    let mut is_paused = false;
+
+    let mut is_forward = true;
 
     info!("Starting Main Loop...");
 
     loop {
-        if is_paused {
-            info!("System Paused. Waiting for touch to resume...");
-            TOUCH_SIGNAL.wait().await;
-            wait_for_release_and_rearm(&mut touch, &touch_pin_14).await;
-            is_paused = false;
-            info!("Touch detected: Resuming system.");
-        } else {
-            let update_future = Timer::after(Duration::from_millis(10));
-            let touch_future = TOUCH_SIGNAL.wait();
+        let update_future = Timer::after(Duration::from_millis(10));
+        let touch_future = TOUCH_SIGNAL.wait();
 
-            match select(update_future, touch_future).await {
-                Either::First(()) => {
-                    if let Ok(raw) = nb::block!(adc.read_oneshot(&mut adc_pin)) {
-                        let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
-                        filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
+        match select(update_future, touch_future).await {
+            Either::First(()) => {
+                if let Ok(raw) = nb::block!(adc.read_oneshot(&mut adc_pin)) {
+                    let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
+                    filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
 
-                        let throttle = calculate_throttle(filtered_mv);
-                        let color = throttle_to_color(throttle);
+                    let throttle = calculate_throttle(filtered_mv);
+                    let color = get_mode_color(throttle, is_forward);
 
-                        match led_driver.write(color).await {
-                            Ok(()) => {}
-                            Err(e) => {
-                                warn!("RMT Transmit Error: {:?}", e);
-                            }
+                    match led_driver.write(color).await {
+                        Ok(()) => {}
+                        Err(e) => {
+                            warn!("RMT Transmit Error: {:?}", e);
                         }
                     }
                 }
-                Either::Second(()) => {
-                    info!("Touch detected: Pausing system.");
-                    is_paused = true;
-                    wait_for_release_and_rearm(&mut touch, &touch_pin_14).await;
+            }
+            Either::Second(()) => {
+                is_forward = !is_forward;
+
+                if is_forward {
+                    info!("Switched to FORWARD");
+                } else {
+                    info!("Switched to REVERSE");
                 }
+
+                wait_for_release_and_rearm(&mut touch, &touch_pin_14).await;
             }
         }
     }
