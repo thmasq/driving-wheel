@@ -8,8 +8,10 @@
 )]
 
 use defmt::{Format, info, warn};
-use driving_wheel::esp32s3_touch_ll::TouchSensorLL;
-use driving_wheel::touch::{TOUCH_LL_INTR_MASK_ACTIVE, TouchChannel, TouchPin, TouchSensor};
+use driving_wheel::touch::{
+    self, TouchChannel, TouchChannelConfig, TouchInterrupts, TouchPin, TouchSensor, pin_state,
+    sensor_state,
+};
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -18,7 +20,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::Level;
-use esp_hal::interrupt::{self, IsrCallback, Priority}; // Import IsrCallback
+use esp_hal::interrupt::{self, IsrCallback, Priority};
 use esp_hal::peripherals::Interrupt;
 use esp_hal::rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator};
 use esp_hal::time::Rate;
@@ -31,10 +33,7 @@ static TOUCH_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 #[esp_hal::ram]
 extern "C" fn rtc_core_isr() {
-    unsafe {
-        TouchSensorLL::interrupt_disable(TOUCH_LL_INTR_MASK_ACTIVE);
-        TouchSensorLL::interrupt_clear(TOUCH_LL_INTR_MASK_ACTIVE);
-    }
+    touch::on_interrupt_isr(TouchInterrupts::ACTIVE);
     TOUCH_SIGNAL.signal(());
 }
 
@@ -116,19 +115,18 @@ fn throttle_to_color(throttle: u8) -> RGB8 {
 }
 
 async fn wait_for_release_and_rearm(
-    touch: &mut TouchSensor<driving_wheel::touch::sensor_state::Running>,
+    touch: &mut TouchSensor<sensor_state::Running>,
+    pin: &TouchPin<pin_state::Analog>,
 ) {
     loop {
-        if !touch.is_channel_active(TouchChannel::Num14) {
+        if !touch.is_channel_active(pin.channel()) {
             break;
         }
         Timer::after(Duration::from_millis(50)).await;
     }
 
-    unsafe {
-        TouchSensorLL::interrupt_clear(TOUCH_LL_INTR_MASK_ACTIVE);
-        TouchSensorLL::interrupt_enable(TOUCH_LL_INTR_MASK_ACTIVE);
-    }
+    touch.clear_interrupts(TouchInterrupts::ACTIVE);
+    touch.enable_interrupts(TouchInterrupts::ACTIVE);
 }
 
 #[esp_rtos::main]
@@ -142,11 +140,15 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     let mut touch_sensor = TouchSensor::new();
-    let touch_pin_14 = TouchPin::new(TouchChannel::Num14).into_analog();
-    touch_sensor.config_channel(&touch_pin_14);
-    touch_sensor.set_threshold(TouchChannel::Num14, TOUCH_THRESHOLD);
 
-    touch_sensor.interrupt_enable(TOUCH_LL_INTR_MASK_ACTIVE);
+    let touch_pin_14 = TouchPin::new(TouchChannel::Touch14).into_analog();
+    let channel_config = TouchChannelConfig {
+        threshold: TOUCH_THRESHOLD,
+        ..Default::default()
+    };
+    touch_sensor.config_channel(&touch_pin_14, channel_config);
+
+    touch_sensor.enable_interrupts(TouchInterrupts::ACTIVE);
 
     unsafe {
         esp_hal::interrupt::bind_interrupt(Interrupt::RTC_CORE, IsrCallback::new(rtc_core_isr));
@@ -191,7 +193,7 @@ async fn main(spawner: Spawner) -> ! {
         if is_paused {
             info!("System Paused. Waiting for touch to resume...");
             TOUCH_SIGNAL.wait().await;
-            wait_for_release_and_rearm(&mut touch).await;
+            wait_for_release_and_rearm(&mut touch, &touch_pin_14).await;
             is_paused = false;
             info!("Touch detected: Resuming system.");
         } else {
@@ -219,7 +221,7 @@ async fn main(spawner: Spawner) -> ! {
                 Either::Second(()) => {
                     info!("Touch detected: Pausing system.");
                     is_paused = true;
-                    wait_for_release_and_rearm(&mut touch).await;
+                    wait_for_release_and_rearm(&mut touch, &touch_pin_14).await;
                 }
             }
         }
