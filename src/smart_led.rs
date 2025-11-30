@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::missing_errors_doc
+)]
+
 use defmt::Format;
 use esp_hal::Async;
 use esp_hal::gpio::interconnect::PeripheralOutput;
@@ -92,7 +98,7 @@ where
     }
 }
 
-impl<'d> SmartLed<Ready<'d>> {
+impl SmartLed<Ready<'_>> {
     pub async fn write(&mut self, color: RGB8) -> Result<(), esp_hal::rmt::Error> {
         self.encode(color);
         self.inner.channel.transmit(&self.inner.buffer).await
