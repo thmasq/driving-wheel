@@ -280,6 +280,7 @@ dependencies = [
  "esp-hal",
  "esp-radio",
  "esp-rtos",
+ "libm",
  "mpu6050-dmp",
  "nb 1.1.0",
  "panic-rtt-target",
