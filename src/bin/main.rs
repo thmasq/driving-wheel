@@ -137,10 +137,10 @@ async fn wait_for_release_and_rearm(
     let mut steady_count = 0;
 
     loop {
-        if !touch.is_channel_active(pin.channel()) {
-            steady_count += 1;
-        } else {
+        if touch.is_channel_active(pin.channel()) {
             steady_count = 0;
+        } else {
+            steady_count += 1;
         }
 
         if steady_count >= 3 {
@@ -257,23 +257,19 @@ async fn main(spawner: Spawner) -> ! {
 
         // --- Task B: MPU6050 Polling (Steering) ---
         // We check the FIFO count directly. If >= 28 bytes, a packet is ready.
-        match mpu.get_fifo_count() {
-            Ok(count) => {
-                if count >= 28 {
-                    let mut buf = [0; 28];
-                    if mpu.read_fifo(&mut buf).is_ok() {
-                        if let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
-                            let ypr = YawPitchRoll::from(quat);
-                            let steer_val = steering_proc.process(ypr.roll);
-                            info!("Steering: {} (Roll: {})", steer_val, ypr.roll);
-                        }
+        if let Ok(count) = mpu.get_fifo_count() {
+            if count >= 28 {
+                let mut buf = [0; 28];
+                if mpu.read_fifo(&mut buf).is_ok()
+                    && let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
+                        let ypr = YawPitchRoll::from(quat);
+                        let steer_val = steering_proc.process(ypr.roll);
+                        info!("Steering: {} (Roll: {})", steer_val, ypr.roll);
                     }
-                }
             }
-            Err(_) => {
-                // I2C Error (Bus busy, sensor disconnected, etc)
-                // We ignore it to keep the loop running
-            }
+        } else {
+            // I2C Error (Bus busy, sensor disconnected, etc)
+            // We ignore it to keep the loop running
         }
 
         // --- Task C: ADC & LED (Throttle) ---
