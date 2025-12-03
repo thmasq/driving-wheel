@@ -4,7 +4,8 @@
 #![allow(
     clippy::missing_safety_doc,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
 )]
 
 use defmt::{error, info, warn};
@@ -14,7 +15,7 @@ use driving_wheel::touch::{
     sensor_state,
 };
 use embassy_executor::Spawner;
-use embassy_net::{Config, Ipv4Address, StackResources};
+use embassy_net::{Config, DhcpConfig, Ipv4Address, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
@@ -171,19 +172,18 @@ async fn connection(mut controller: WifiController<'static>) {
     info!("Starting Wi-Fi Connection task");
     loop {
         if controller.is_started().ok().unwrap_or(false) {
-            match controller.wait_for_event(WifiEvent::StaDisconnected).await {
-                _ => {
-                    warn!("Wi-Fi Disconnected! Retrying...");
-                    Timer::after(Duration::from_millis(5000)).await;
-                }
+            let () = controller.wait_for_event(WifiEvent::StaDisconnected).await;
+            {
+                warn!("Wi-Fi Disconnected! Retrying...");
+                Timer::after(Duration::from_millis(5000)).await;
             }
         }
 
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = ModeConfig::Client(
                 ClientConfig::default()
-                    .with_ssid(SSID.try_into().unwrap())
-                    .with_password(PASSWORD.try_into().unwrap()),
+                    .with_ssid(SSID.into())
+                    .with_password(PASSWORD.into()),
             );
 
             controller.set_config(&client_config).unwrap();
@@ -193,10 +193,10 @@ async fn connection(mut controller: WifiController<'static>) {
 
         info!("Connecting to Wi-Fi...");
         match controller.connect() {
-            Ok(_) => info!("Wi-Fi Connected!"),
+            Ok(()) => info!("Wi-Fi Connected!"),
             Err(e) => {
                 warn!("Failed to connect to wifi: {:?}", e);
-                Timer::after(Duration::from_millis(5000)).await
+                Timer::after(Duration::from_millis(5000)).await;
             }
         }
     }
@@ -204,7 +204,7 @@ async fn connection(mut controller: WifiController<'static>) {
 
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>) {
-    runner.run().await
+    runner.run().await;
 }
 
 macro_rules! mk_static {
@@ -224,7 +224,7 @@ async fn main(spawner: Spawner) -> ! {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     let rng = Rng::new();
-    let seed = rng.random() as u64;
+    let seed = u64::from(rng.random());
 
     esp_rtos::start(timg0.timer0);
 
@@ -239,7 +239,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let wifi_interface = interfaces.sta;
 
-    let net_config = Config::dhcpv4(Default::default());
+    let net_config = Config::dhcpv4(DhcpConfig::default());
 
     let (stack, runner) = embassy_net::new(
         wifi_interface,
@@ -362,12 +362,12 @@ async fn main(spawner: Spawner) -> ! {
         if let Ok(count) = mpu.get_fifo_count() {
             if count >= 28 {
                 let mut buf = [0; 28];
-                if mpu.read_fifo(&mut buf).is_ok() {
-                    if let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
-                        let ypr = YawPitchRoll::from(quat);
-                        let steer_val = steering_proc.process(ypr.roll);
-                        current_steering = steer_val;
-                    }
+                if mpu.read_fifo(&mut buf).is_ok()
+                    && let Some(quat) = Quaternion::from_bytes(&buf[..16])
+                {
+                    let ypr = YawPitchRoll::from(quat);
+                    let steer_val = steering_proc.process(ypr.roll);
+                    current_steering = steer_val;
                 }
             }
         } else {
@@ -403,7 +403,7 @@ async fn main(spawner: Spawner) -> ! {
             let payload = [throttle_i8 as u8, steering_i8 as u8];
 
             match socket.send_to(&payload, remote_endpoint).await {
-                Ok(_) => {}
+                Ok(()) => {}
                 Err(e) => warn!("UDP Send Error: {:?}", e),
             }
         }
