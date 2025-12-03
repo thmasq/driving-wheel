@@ -261,11 +261,12 @@ async fn main(spawner: Spawner) -> ! {
             if count >= 28 {
                 let mut buf = [0; 28];
                 if mpu.read_fifo(&mut buf).is_ok()
-                    && let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
-                        let ypr = YawPitchRoll::from(quat);
-                        let steer_val = steering_proc.process(ypr.roll);
-                        info!("Steering: {} (Roll: {})", steer_val, ypr.roll);
-                    }
+                    && let Some(quat) = Quaternion::from_bytes(&buf[..16])
+                {
+                    let ypr = YawPitchRoll::from(quat);
+                    let steer_val = steering_proc.process(ypr.roll);
+                    info!("Steering: {} (Roll: {})", steer_val, ypr.roll);
+                }
             }
         } else {
             // I2C Error (Bus busy, sensor disconnected, etc)
