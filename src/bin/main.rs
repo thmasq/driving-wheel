@@ -14,6 +14,7 @@ use driving_wheel::touch::{
     sensor_state,
 };
 use embassy_executor::Spawner;
+use embassy_net::{Config, Ipv4Address, StackResources};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
@@ -25,12 +26,18 @@ use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::interrupt::{self, IsrCallback, Priority};
 use esp_hal::peripherals::Interrupt;
 use esp_hal::rmt::{Rmt, TxChannelConfig};
+use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
+
+use esp_radio::wifi::{
+    ClientConfig, Config as WifiDriverConfig, ModeConfig, WifiController, WifiDevice, WifiEvent,
+};
 use mpu6050_dmp::{
     address::Address, quaternion::Quaternion, sensor::Mpu6050, yaw_pitch_roll::YawPitchRoll,
 };
 use panic_rtt_target as _;
+use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -55,10 +62,16 @@ const FILTER_ALPHA: f32 = 0.2;
 const TOUCH_THRESHOLD: u32 = 40_000;
 
 // Steering Configuration
-const STEERING_DEADZONE: f32 = 0.05; // 5% center deadzone
-const STEERING_CURVE: f32 = 1.5; // Sensitivity curve (1.0 = linear)
-const STEERING_SMOOTH: f32 = 0.2; // Smoothing factor
-const FULL_LOCK_RADS: f32 = 1.57; // ~90 degrees is full lock
+const STEERING_DEADZONE: f32 = 0.05;
+const STEERING_CURVE: f32 = 1.5;
+const STEERING_SMOOTH: f32 = 0.2;
+const FULL_LOCK_RADS: f32 = 1.57;
+
+// Networking
+const SSID: &str = "FSE-Tsunderacer";
+const PASSWORD: &str = "cirnobaka9";
+const REMOTE_IP: Ipv4Address = Ipv4Address::new(192, 168, 9, 9);
+const REMOTE_PORT: u16 = 9999;
 
 // =============================================================================
 // Helpers & Algorithms
@@ -153,16 +166,90 @@ async fn wait_for_release_and_rearm(
     touch.enable_interrupts(TouchInterrupts::ACTIVE);
 }
 
+#[embassy_executor::task]
+async fn connection(mut controller: WifiController<'static>) {
+    info!("Starting Wi-Fi Connection task");
+    loop {
+        if controller.is_started().ok().unwrap_or(false) {
+            match controller.wait_for_event(WifiEvent::StaDisconnected).await {
+                _ => {
+                    warn!("Wi-Fi Disconnected! Retrying...");
+                    Timer::after(Duration::from_millis(5000)).await;
+                }
+            }
+        }
+
+        if !matches!(controller.is_started(), Ok(true)) {
+            let client_config = ModeConfig::Client(
+                ClientConfig::default()
+                    .with_ssid(SSID.try_into().unwrap())
+                    .with_password(PASSWORD.try_into().unwrap()),
+            );
+
+            controller.set_config(&client_config).unwrap();
+            info!("Starting Wi-Fi controller...");
+            controller.start().unwrap();
+        }
+
+        info!("Connecting to Wi-Fi...");
+        match controller.connect() {
+            Ok(_) => info!("Wi-Fi Connected!"),
+            Err(e) => {
+                warn!("Failed to connect to wifi: {:?}", e);
+                Timer::after(Duration::from_millis(5000)).await
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>) {
+    runner.run().await
+}
+
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: StaticCell<$t> = StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.init($val);
+        x
+    }};
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     rtt_target::rtt_init_defmt!();
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+
+    let rng = Rng::new();
+    let seed = rng.random() as u64;
+
     esp_rtos::start(timg0.timer0);
 
     Timer::after(Duration::from_millis(100)).await;
     info!("Embassy initialized!");
+
+    // --- 0. Init Wi-Fi & Network Stack ---
+    let init = mk_static!(esp_radio::Controller<'static>, esp_radio::init().unwrap());
+
+    let (controller, interfaces) =
+        esp_radio::wifi::new(init, peripherals.WIFI, WifiDriverConfig::default()).unwrap();
+
+    let wifi_interface = interfaces.sta;
+
+    let net_config = Config::dhcpv4(Default::default());
+
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        net_config,
+        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        seed,
+    );
+
+    spawner.spawn(connection(controller)).unwrap();
+    spawner.spawn(net_task(runner)).unwrap();
 
     // --- 1. Init Touch Sensor ---
     let mut touch_sensor = TouchSensor::new();
@@ -235,10 +322,26 @@ async fn main(spawner: Spawner) -> ! {
         .initialize(tx_config, src_clock_mhz)
         .unwrap();
 
-    let _ = spawner;
     let mut filtered_mv: f32 = V_MIN;
-
     let mut is_forward = true;
+    let mut current_steering: f32 = 0.0;
+    let mut throttle_u8: u8 = 0;
+
+    // --- 6. Prepare UDP Socket ---
+    let mut rx_buffer = [0; 64];
+    let mut tx_buffer = [0; 64];
+    let mut rx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 4];
+    let mut tx_meta = [embassy_net::udp::PacketMetadata::EMPTY; 4];
+
+    let mut socket = embassy_net::udp::UdpSocket::new(
+        stack,
+        &mut rx_meta,
+        &mut rx_buffer,
+        &mut tx_meta,
+        &mut tx_buffer,
+    );
+
+    socket.bind(0).unwrap();
 
     info!("Starting Main Loop...");
 
@@ -256,16 +359,15 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         // --- Task B: MPU6050 Polling (Steering) ---
-        // We check the FIFO count directly. If >= 28 bytes, a packet is ready.
         if let Ok(count) = mpu.get_fifo_count() {
             if count >= 28 {
                 let mut buf = [0; 28];
-                if mpu.read_fifo(&mut buf).is_ok()
-                    && let Some(quat) = Quaternion::from_bytes(&buf[..16])
-                {
-                    let ypr = YawPitchRoll::from(quat);
-                    let steer_val = steering_proc.process(ypr.roll);
-                    info!("Steering: {} (Roll: {})", steer_val, ypr.roll);
+                if mpu.read_fifo(&mut buf).is_ok() {
+                    if let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
+                        let ypr = YawPitchRoll::from(quat);
+                        let steer_val = steering_proc.process(ypr.roll);
+                        current_steering = steer_val;
+                    }
                 }
             }
         } else {
@@ -278,11 +380,31 @@ async fn main(spawner: Spawner) -> ! {
             let current_mv = (f32::from(raw) / 4095.0) * 3300.0;
             filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
 
-            let throttle = calculate_throttle(filtered_mv);
-            let color = get_mode_color(throttle, is_forward);
+            throttle_u8 = calculate_throttle(filtered_mv);
+            let color = get_mode_color(throttle_u8, is_forward);
 
             if let Err(e) = led_driver.write(color).await {
                 warn!("RMT Transmit Error: {:?}", e);
+            }
+        }
+
+        // --- Task D: Network (Send UDP) ---
+        if stack.is_link_up() {
+            let remote_endpoint =
+                embassy_net::IpEndpoint::new(embassy_net::IpAddress::Ipv4(REMOTE_IP), REMOTE_PORT);
+
+            let throttle_i8 = if is_forward {
+                throttle_u8 as i8
+            } else {
+                -(throttle_u8 as i8)
+            };
+
+            let steering_i8 = (current_steering * 100.0) as i8;
+            let payload = [throttle_i8 as u8, steering_i8 as u8];
+
+            match socket.send_to(&payload, remote_endpoint).await {
+                Ok(_) => {}
+                Err(e) => warn!("UDP Send Error: {:?}", e),
             }
         }
     }
