@@ -399,7 +399,7 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         // --- Task D: Network (Send UDP) ---
-        if stack.is_link_up() {
+        if stack.is_config_up() {
             let remote_endpoint =
                 embassy_net::IpEndpoint::new(embassy_net::IpAddress::Ipv4(REMOTE_IP), REMOTE_PORT);
 
