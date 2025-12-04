@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+    tags:
+      - "v*" # Trigger on version tags (e.g. v0.1.0)
     paths-ignore:
       - "**/README.md"
   pull_request:
@@ -40,3 +42,38 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+
+  release-binary:
+    name: Build & Publish Release
+    # Only run this job if a tag starting with 'v' was pushed
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: rust-checks # Ensure checks pass before releasing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Rust
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          buildtargets: esp32s3
+          ldproxy: false
+          
+      - name: Enable caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Release
+        run: cargo build --release
+
+      - name: Prepare Artifact
+        run: |
+          # Copy the compiled ELF to the root with a specific name
+          # The path depends on your target architecture defined in .cargo/config.toml
+          cp target/xtensa-esp32s3-none-elf/release/driving-wheel driving-wheel.elf
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: driving-wheel.elf
+          generate_release_notes: true
