@@ -15,7 +15,7 @@ use driving_wheel::touch::{
     sensor_state,
 };
 use embassy_executor::Spawner;
-use embassy_net::{Config, DhcpConfig, Ipv4Address, StackResources};
+use embassy_net::{Config, Ipv4Address, Ipv4Cidr, StackResources, StaticConfigV4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
@@ -243,7 +243,13 @@ async fn main(spawner: Spawner) -> ! {
 
     let wifi_interface = interfaces.sta;
 
-    let net_config = Config::dhcpv4(DhcpConfig::default());
+    let controller_ip = Ipv4Address::new(192, 168, 9, 10);
+
+    let net_config = Config::ipv4_static(StaticConfigV4 {
+        address: Ipv4Cidr::new(controller_ip, 24),
+        gateway: Some(Ipv4Address::new(192, 168, 9, 1)),
+        dns_servers: Default::default(),
+    });
 
     let (stack, runner) = embassy_net::new(
         wifi_interface,
