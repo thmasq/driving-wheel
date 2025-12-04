@@ -173,14 +173,6 @@ async fn wait_for_release_and_rearm(
 async fn connection(mut controller: WifiController<'static>) {
     info!("Starting Wi-Fi Connection task");
     loop {
-        if controller.is_started().ok().unwrap_or(false) {
-            let () = controller.wait_for_event(WifiEvent::StaDisconnected).await;
-            {
-                warn!("Wi-Fi Disconnected! Retrying...");
-                Timer::after(Duration::from_millis(5000)).await;
-            }
-        }
-
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = ModeConfig::Client(
                 ClientConfig::default()
@@ -193,11 +185,19 @@ async fn connection(mut controller: WifiController<'static>) {
             controller.start().unwrap();
         }
 
-        info!("Connecting to Wi-Fi...");
+        info!("Commanding Wi-Fi Connect...");
         match controller.connect() {
-            Ok(()) => info!("Wi-Fi Connected!"),
+            Ok(()) => {
+                info!("Waiting for link...");
+                controller.wait_for_event(WifiEvent::StaConnected).await;
+                info!("Wi-Fi Link Established!");
+
+                controller.wait_for_event(WifiEvent::StaDisconnected).await;
+                warn!("Wi-Fi Disconnected! Retrying...");
+                Timer::after(Duration::from_millis(5000)).await;
+            }
             Err(e) => {
-                warn!("Failed to connect to wifi: {:?}", e);
+                warn!("Failed to initiate connection: {:?}", e);
                 Timer::after(Duration::from_millis(5000)).await;
             }
         }
