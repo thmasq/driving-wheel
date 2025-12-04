@@ -22,7 +22,6 @@ embedded-io = { version = "0.7.1", features = ["defmt"] }
 embedded-io-async = { version = "0.7.0", features = ["defmt"] }
 esp-alloc = { version = "0.9.0", features = ["defmt"] }
 esp-radio = { version = "0.17.0", features = ["defmt", "esp-alloc", "esp32s3", "smoltcp", "unstable", "wifi"] }
-rtt-target = { version = "0.6.2", features = ["defmt"] }
 smoltcp = { version = "0.12.0", default-features = false, features = ["defmt", "medium-ethernet", "multicast", "proto-dhcpv4", "proto-dns", "proto-ipv4", "socket-dns", "socket-icmp", "socket-raw", "socket-tcp", "socket-udp"] }
 
 bitflags = "2.10.0"
@@ -32,8 +31,10 @@ embassy-sync = { version = "0.7.2", features = [] }
 libm = "0.2.15"
 mpu6050-dmp = { version = "0.6.1", features = ["async", "defmt-03"] }
 nb = { version = "1.1.0", features = ["defmt-0-3"] }
-panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
 static_cell = "2.1.1"
+esp-backtrace = { version = "0.18.1", features = ["defmt", "esp32s3", "panic-handler"] }
+esp-println = { version = "0.16.1", features = ["esp32s3", "defmt-espflash"] }
+panic-halt = "1.0.0"
 
 [profile.dev]
 opt-level = "s"

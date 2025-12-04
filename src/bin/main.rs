@@ -37,7 +37,9 @@ use esp_radio::wifi::{
 use mpu6050_dmp::{
     address::Address, quaternion::Quaternion, sensor::Mpu6050, yaw_pitch_roll::YawPitchRoll,
 };
-use panic_rtt_target as _;
+
+use esp_backtrace as _;
+use esp_println as _;
 use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -218,9 +220,11 @@ macro_rules! mk_static {
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    rtt_target::rtt_init_defmt!();
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 72 * 1024);
+
     let timg0 = TimerGroup::new(peripherals.TIMG0);
 
     let rng = Rng::new();
