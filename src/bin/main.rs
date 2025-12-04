@@ -8,6 +8,7 @@
     clippy::cast_possible_wrap
 )]
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use defmt::{error, info, warn};
 use driving_wheel::smart_led::{RGB8, SmartLed};
 use embassy_executor::Spawner;
@@ -16,7 +17,7 @@ use embassy_time::{Duration, Timer, with_timeout};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
-use esp_hal::gpio::Level;
+use esp_hal::gpio::{AnyPin, Input, Level, Output, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::rmt::{Rmt, TxChannelConfig};
 use esp_hal::rng::Rng;
@@ -59,6 +60,9 @@ const SSID: &str = "FSE-Tsunderacer";
 const PASSWORD: &str = "cirnobaka9";
 const REMOTE_IP: Ipv4Address = Ipv4Address::new(192, 168, 9, 9);
 const REMOTE_PORT: u16 = 9999;
+
+// Global State
+static IS_FORWARD: AtomicBool = AtomicBool::new(true);
 
 // =============================================================================
 // Helpers & Algorithms
@@ -177,6 +181,39 @@ async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>)
     runner.run().await;
 }
 
+#[embassy_executor::task]
+async fn button_task(mut input: Input<'static, AnyPin>, mut gnd: Output<'static, AnyPin>) {
+    // Provide Ground reference on GPIO 14
+    gnd.set_low();
+
+    loop {
+        // Wait for button press (Falling edge because of PullUp)
+        input.wait_for_falling_edge().await;
+
+        // Simple debounce
+        Timer::after(Duration::from_millis(50)).await;
+
+        // Check if still pressed
+        if input.is_low() {
+            // Toggle direction
+            let was_forward = IS_FORWARD.load(Ordering::Relaxed);
+            let now_forward = !was_forward;
+            IS_FORWARD.store(now_forward, Ordering::Relaxed);
+
+            if now_forward {
+                info!("Direction: FORWARD");
+            } else {
+                info!("Direction: REVERSE");
+            }
+        }
+
+        // Wait for release to prevent rapid toggling while holding
+        // We wait for a rising edge (return to PullUp state)
+        let _ = input.wait_for_rising_edge().await;
+        Timer::after(Duration::from_millis(50)).await;
+    }
+}
+
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: StaticCell<$t> = StaticCell::new();
@@ -228,6 +265,17 @@ async fn main(spawner: Spawner) -> ! {
 
     spawner.spawn(connection(controller)).unwrap();
     spawner.spawn(net_task(runner)).unwrap();
+
+    // --- 1. Init Button (Interrupt Driven) ---
+    // GPIO 13: Input (PullUp)
+    // GPIO 14: Output (Low / Ground)
+    let btn_pin = peripherals.GPIO13.degrade();
+    let gnd_pin = peripherals.GPIO14.degrade();
+
+    let button_input = Input::new(btn_pin, Pull::Up);
+    let button_gnd = Output::new(gnd_pin, Level::Low);
+
+    spawner.spawn(button_task(button_input, button_gnd)).unwrap();
 
     // --- 3. Init I2C (MPU6050) ---
     let sda = peripherals.GPIO1;
@@ -281,7 +329,6 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     let mut filtered_mv: f32 = V_MIN;
-    let is_forward = true;
     let mut current_steering: f32 = 0.0;
     let mut throttle_u8: u8 = 0;
 
@@ -306,6 +353,9 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after(Duration::from_millis(1)).await;
 
+        // --- Read Global Toggle State ---
+        let is_forward = IS_FORWARD.load(Ordering::Relaxed);
+
         // --- Task B: MPU6050 Polling (Steering) ---
         if let Ok(count) = mpu.get_fifo_count() {
             if count > 280 {
@@ -319,12 +369,12 @@ async fn main(spawner: Spawner) -> ! {
                     let _ = mpu.read_fifo(&mut buf);
                 }
 
-                if mpu.read_fifo(&mut buf).is_ok()
-                    && let Some(quat) = Quaternion::from_bytes(&buf[..16])
-                {
-                    let ypr = YawPitchRoll::from(quat);
-                    let steer_val = steering_proc.process(ypr.roll);
-                    current_steering = steer_val;
+                if mpu.read_fifo(&mut buf).is_ok() {
+                    if let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
+                        let ypr = YawPitchRoll::from(quat);
+                        let steer_val = steering_proc.process(ypr.roll);
+                        current_steering = steer_val;
+                    }
                 }
             }
         }
@@ -335,6 +385,8 @@ async fn main(spawner: Spawner) -> ! {
             filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
 
             throttle_u8 = calculate_throttle(filtered_mv);
+            
+            // Updates LED color based on Direction state
             let color = get_mode_color(throttle_u8, is_forward);
 
             if let Err(e) = led_driver.write(color).await {
@@ -347,6 +399,7 @@ async fn main(spawner: Spawner) -> ! {
             let remote_endpoint =
                 embassy_net::IpEndpoint::new(embassy_net::IpAddress::Ipv4(REMOTE_IP), REMOTE_PORT);
 
+            // Apply direction to throttle value
             let throttle_i8 = if is_forward {
                 throttle_u8 as i8
             } else {
@@ -366,8 +419,6 @@ async fn main(spawner: Spawner) -> ! {
                 Ok(Err(e)) => warn!("UDP Send Error: {:?}", e),
                 Err(_) => {
                     // Timeout occurred
-                    // We don't log here to avoid flooding console,
-                    // but we know we skipped a frame to keep loop alive.
                 }
             }
         }
