@@ -10,22 +10,14 @@
 
 use defmt::{error, info, warn};
 use driving_wheel::smart_led::{RGB8, SmartLed};
-use driving_wheel::touch::{
-    self, TouchChannel, TouchChannelConfig, TouchInterrupts, TouchPin, TouchSensor, pin_state,
-    sensor_state,
-};
 use embassy_executor::Spawner;
 use embassy_net::{Config, Ipv4Address, Ipv4Cidr, StackResources, StaticConfigV4};
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Timer, with_timeout};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::gpio::Level;
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
-use esp_hal::interrupt::{self, IsrCallback, Priority};
-use esp_hal::peripherals::Interrupt;
 use esp_hal::rmt::{Rmt, TxChannelConfig};
 use esp_hal::rng::Rng;
 use esp_hal::time::Rate;
@@ -44,14 +36,6 @@ use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static TOUCH_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-
-#[esp_hal::ram]
-extern "C" fn rtc_core_isr() {
-    touch::on_interrupt_isr(TouchInterrupts::ACTIVE);
-    TOUCH_SIGNAL.signal(());
-}
-
 // =============================================================================
 // Constants
 // =============================================================================
@@ -62,13 +46,13 @@ const POLY_A: f32 = -3.714_882_5e-6;
 const POLY_B: f32 = 8.800_675e-3;
 const POLY_C: f32 = -4.162_483;
 const FILTER_ALPHA: f32 = 0.2;
-const TOUCH_THRESHOLD: u32 = 40_000;
 
 // Steering Configuration
 const STEERING_DEADZONE: f32 = 0.05;
 const STEERING_CURVE: f32 = 1.5;
 const STEERING_SMOOTH: f32 = 0.2;
-const FULL_LOCK_RADS: f32 = 1.57;
+const LOCK_RIGHT_RADS: f32 = 1.4567; // Max reading when turned right
+const LOCK_LEFT_RADS: f32 = -1.6208; // Max reading when turned left
 
 // Networking
 const SSID: &str = "FSE-Tsunderacer";
@@ -123,7 +107,14 @@ impl SteeringProcessor {
 
     pub fn process(&mut self, raw_angle_rads: f32) -> f32 {
         let centered = raw_angle_rads - self.center_offset;
-        let mut normalized = (centered / FULL_LOCK_RADS).clamp(-1.0, 1.0);
+
+        let scale_factor = if centered >= 0.0 {
+            LOCK_RIGHT_RADS
+        } else {
+            -LOCK_LEFT_RADS
+        };
+
+        let mut normalized = (centered / scale_factor).clamp(-1.0, 1.0);
 
         let val_abs = libm::fabsf(normalized);
         if val_abs < self.deadzone {
@@ -144,29 +135,6 @@ impl SteeringProcessor {
         self.last_output = output;
         output
     }
-}
-
-async fn wait_for_release_and_rearm(
-    touch: &mut TouchSensor<sensor_state::Running>,
-    pin: &TouchPin<pin_state::Analog>,
-) {
-    let mut steady_count = 0;
-
-    loop {
-        if touch.is_channel_active(pin.channel()) {
-            steady_count = 0;
-        } else {
-            steady_count += 1;
-        }
-
-        if steady_count >= 3 {
-            break;
-        }
-        Timer::after(Duration::from_millis(20)).await;
-    }
-
-    touch.clear_interrupts(TouchInterrupts::ACTIVE);
-    touch.enable_interrupts(TouchInterrupts::ACTIVE);
 }
 
 #[embassy_executor::task]
@@ -261,26 +229,6 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(controller)).unwrap();
     spawner.spawn(net_task(runner)).unwrap();
 
-    // --- 1. Init Touch Sensor ---
-    let mut touch_sensor = TouchSensor::new();
-
-    let touch_pin_14 = TouchPin::new(TouchChannel::Touch14).into_analog();
-    let channel_config = TouchChannelConfig {
-        threshold: TOUCH_THRESHOLD,
-        ..Default::default()
-    };
-
-    touch_sensor.config_channel(&touch_pin_14, channel_config);
-    touch_sensor.enable_interrupts(TouchInterrupts::ACTIVE);
-
-    unsafe {
-        esp_hal::interrupt::bind_interrupt(Interrupt::RTC_CORE, IsrCallback::new(rtc_core_isr));
-        interrupt::enable(Interrupt::RTC_CORE, Priority::Priority1).unwrap();
-    }
-
-    let mut touch = touch_sensor.start();
-    info!("Touch Sensor initialized");
-
     // --- 3. Init I2C (MPU6050) ---
     let sda = peripherals.GPIO1;
     let scl = peripherals.GPIO2;
@@ -333,7 +281,7 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap();
 
     let mut filtered_mv: f32 = V_MIN;
-    let mut is_forward = true;
+    let is_forward = true;
     let mut current_steering: f32 = 0.0;
     let mut throttle_u8: u8 = 0;
 
@@ -356,22 +304,21 @@ async fn main(spawner: Spawner) -> ! {
     info!("Starting Main Loop...");
 
     loop {
-        Timer::after(Duration::from_millis(10)).await;
-
-        // --- Task A: Touch Sensor (Direction) ---
-        if TOUCH_SIGNAL.try_take().is_some() {
-            is_forward = !is_forward;
-            info!(
-                "Direction: {}",
-                if is_forward { "FORWARD" } else { "REVERSE" }
-            );
-            wait_for_release_and_rearm(&mut touch, &touch_pin_14).await;
-        }
+        Timer::after(Duration::from_millis(1)).await;
 
         // --- Task B: MPU6050 Polling (Steering) ---
         if let Ok(count) = mpu.get_fifo_count() {
-            if count >= 28 {
+            if count > 280 {
+                warn!("MPU FIFO overflow (count: {}). Resetting...", count);
+                let _ = mpu.reset_fifo();
+            } else if count >= 28 {
+                let packets = count / 28;
                 let mut buf = [0; 28];
+
+                for _ in 0..(packets - 1) {
+                    let _ = mpu.read_fifo(&mut buf);
+                }
+
                 if mpu.read_fifo(&mut buf).is_ok()
                     && let Some(quat) = Quaternion::from_bytes(&buf[..16])
                 {
@@ -380,9 +327,6 @@ async fn main(spawner: Spawner) -> ! {
                     current_steering = steer_val;
                 }
             }
-        } else {
-            // I2C Error (Bus busy, sensor disconnected, etc)
-            // We ignore it to keep the loop running
         }
 
         // --- Task C: ADC & LED (Throttle) ---
@@ -399,7 +343,7 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         // --- Task D: Network (Send UDP) ---
-        if stack.is_config_up() {
+        if stack.is_config_up() && stack.is_link_up() {
             let remote_endpoint =
                 embassy_net::IpEndpoint::new(embassy_net::IpAddress::Ipv4(REMOTE_IP), REMOTE_PORT);
 
@@ -412,9 +356,19 @@ async fn main(spawner: Spawner) -> ! {
             let steering_i8 = (current_steering * 100.0) as i8;
             let payload = [throttle_i8 as u8, steering_i8 as u8];
 
-            match socket.send_to(&payload, remote_endpoint).await {
-                Ok(()) => {}
-                Err(e) => warn!("UDP Send Error: {:?}", e),
+            match with_timeout(
+                Duration::from_millis(50), // Drop packet if it takes > 50ms
+                socket.send_to(&payload, remote_endpoint),
+            )
+            .await
+            {
+                Ok(Ok(())) => {} // Success
+                Ok(Err(e)) => warn!("UDP Send Error: {:?}", e),
+                Err(_) => {
+                    // Timeout occurred
+                    // We don't log here to avoid flooding console,
+                    // but we know we skipped a frame to keep loop alive.
+                }
             }
         }
     }
