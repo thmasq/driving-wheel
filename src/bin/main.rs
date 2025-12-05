@@ -17,7 +17,7 @@ use embassy_time::{Duration, Timer, with_timeout};
 use esp_hal::analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
-use esp_hal::gpio::{AnyPin, Input, Level, Output, Pull};
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::rmt::{Rmt, TxChannelConfig};
 use esp_hal::rng::Rng;
@@ -182,7 +182,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, WifiDevice<'static>>)
 }
 
 #[embassy_executor::task]
-async fn button_task(mut input: Input<'static, AnyPin>, mut gnd: Output<'static, AnyPin>) {
+async fn button_task(mut input: Input<'static>, mut gnd: Output<'static>) {
     // Provide Ground reference on GPIO 14
     gnd.set_low();
 
@@ -209,7 +209,7 @@ async fn button_task(mut input: Input<'static, AnyPin>, mut gnd: Output<'static,
 
         // Wait for release to prevent rapid toggling while holding
         // We wait for a rising edge (return to PullUp state)
-        let _ = input.wait_for_rising_edge().await;
+        let () = input.wait_for_rising_edge().await;
         Timer::after(Duration::from_millis(50)).await;
     }
 }
@@ -253,6 +253,7 @@ async fn main(spawner: Spawner) -> ! {
     let net_config = Config::ipv4_static(StaticConfigV4 {
         address: Ipv4Cidr::new(controller_ip, 24),
         gateway: Some(Ipv4Address::new(192, 168, 9, 1)),
+        #[allow(clippy::default_trait_access)]
         dns_servers: Default::default(),
     });
 
@@ -269,13 +270,14 @@ async fn main(spawner: Spawner) -> ! {
     // --- 1. Init Button (Interrupt Driven) ---
     // GPIO 13: Input (PullUp)
     // GPIO 14: Output (Low / Ground)
-    let btn_pin = peripherals.GPIO13.degrade();
-    let gnd_pin = peripherals.GPIO14.degrade();
+    let button_config = InputConfig::default().with_pull(Pull::Up);
+    let button_input = Input::new(peripherals.GPIO13, button_config);
 
-    let button_input = Input::new(btn_pin, Pull::Up);
-    let button_gnd = Output::new(gnd_pin, Level::Low);
+    let button_gnd = Output::new(peripherals.GPIO14, Level::Low, OutputConfig::default());
 
-    spawner.spawn(button_task(button_input, button_gnd)).unwrap();
+    spawner
+        .spawn(button_task(button_input, button_gnd))
+        .unwrap();
 
     // --- 3. Init I2C (MPU6050) ---
     let sda = peripherals.GPIO1;
@@ -369,12 +371,12 @@ async fn main(spawner: Spawner) -> ! {
                     let _ = mpu.read_fifo(&mut buf);
                 }
 
-                if mpu.read_fifo(&mut buf).is_ok() {
-                    if let Some(quat) = Quaternion::from_bytes(&buf[..16]) {
-                        let ypr = YawPitchRoll::from(quat);
-                        let steer_val = steering_proc.process(ypr.roll);
-                        current_steering = steer_val;
-                    }
+                if mpu.read_fifo(&mut buf).is_ok()
+                    && let Some(quat) = Quaternion::from_bytes(&buf[..16])
+                {
+                    let ypr = YawPitchRoll::from(quat);
+                    let steer_val = steering_proc.process(ypr.roll);
+                    current_steering = steer_val;
                 }
             }
         }
@@ -385,7 +387,7 @@ async fn main(spawner: Spawner) -> ! {
             filtered_mv = filtered_mv + FILTER_ALPHA * (current_mv - filtered_mv);
 
             throttle_u8 = calculate_throttle(filtered_mv);
-            
+
             // Updates LED color based on Direction state
             let color = get_mode_color(throttle_u8, is_forward);
 
@@ -409,6 +411,7 @@ async fn main(spawner: Spawner) -> ! {
             let steering_i8 = (current_steering * 100.0) as i8;
             let payload = [throttle_i8 as u8, steering_i8 as u8];
 
+            #[allow(clippy::match_same_arms)]
             match with_timeout(
                 Duration::from_millis(50), // Drop packet if it takes > 50ms
                 socket.send_to(&payload, remote_endpoint),
